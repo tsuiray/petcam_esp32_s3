@@ -1,10 +1,17 @@
+# Arduino / IDE
 build/
-managed_components/
-dependencies.lock
-sdkconfig
-sdkconfig.old
+*.hex
+*.elf
+*.bin
 .vscode/
 .idea/
-*.pyc
-__pycache__/
 .DS_Store
+
+# Secrets — keep your real Wi-Fi out of git if you edit locally
+# (prefer editing board_config.h only on the device machine)
+
+# Leftover ESP-IDF artifacts (if any)
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies.lock
