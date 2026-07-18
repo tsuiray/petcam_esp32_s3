@@ -1,0 +1,17 @@
+#pragma once
+
+/*
+ * Copy this file to board_config.local.h and fill in real values.
+ * board_config.local.h is gitignored — do not commit secrets.
+ */
+
+#define WIFI_SSID "YOUR_HOME_WIFI_SSID"
+#define WIFI_PASSWORD "YOUR_HOME_WIFI_PASSWORD"
+#define MICROROS_AGENT_IP "192.168.1.100"
+#define MICROROS_AGENT_PORT 8888
+
+/* Optional pin overrides:
+#define BOARD_I2C_SDA 8
+#define BOARD_I2C_SCL 9
+#define BOARD_MPU6050_ADDR 0x68
+*/

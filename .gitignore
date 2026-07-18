@@ -7,8 +7,9 @@ build/
 .idea/
 .DS_Store
 
-# Secrets — keep your real Wi-Fi out of git if you edit locally
-# (prefer editing board_config.h only on the device machine)
+# Local secrets (copy from board_config.local.h.example)
+esp32/board_config.local.h
+board_config.local.h
 
 # Leftover ESP-IDF artifacts (if any)
 sdkconfig
