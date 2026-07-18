@@ -2,7 +2,7 @@
 
 ESP32-S3 firmware for PetCam: **micro-ROS (Humble)** over **Wi‑Fi UDP**, publishing **MPU6050** IMU data to an NVIDIA Orin Nano (ROS 2 Humble).
 
-Built for **Arduino IDE** (not ESP-IDF).
+Built for **Arduino IDE** (not ESP-IDF). Sketch lives in [`esp32/`](esp32/) so the folder name matches `esp32.ino`.
 
 ## Architecture
 
@@ -17,6 +17,8 @@ Both devices join the **same home Wi‑Fi AP** as stations. **Not** Wi‑Fi Dire
 | Topic | Type | Rate |
 |-------|------|------|
 | `/imu/data` | `sensor_msgs/msg/Imu` | 50 Hz (`IMU_PUBLISH_PERIOD_MS = 20`) |
+
+The firmware **reconnects** if Wi‑Fi drops or the micro-ROS agent goes away (entities are torn down and recreated when the agent is reachable again).
 
 ## Arduino IDE setup
 
@@ -71,9 +73,17 @@ docker pull microros/micro_ros_static_library_builder:humble
 docker run -it --rm -v "%USERPROFILE%/OneDrive/Documents/Arduino/libraries/micro_ros_arduino:/project" --env MICROROS_LIBRARY_FOLDER=extras microros/micro_ros_static_library_builder:humble -p esp32s3
 ```
 
-### 3. Configure Wi‑Fi and Agent IP
+### 3. Configure Wi‑Fi and Agent IP (secrets)
 
-Edit [`board_config.h`](board_config.h):
+Do **not** commit real SSID/password. Use a local override:
+
+```cmd
+cd C:\Petcam\edge\esp32\esp32
+copy board_config.local.h.example board_config.local.h
+notepad board_config.local.h
+```
+
+Set at least:
 
 ```cpp
 #define WIFI_SSID "YOUR_HOME_WIFI_SSID"
@@ -82,23 +92,28 @@ Edit [`board_config.h`](board_config.h):
 #define MICROROS_AGENT_PORT 8888
 ```
 
-Also set I2C pins / MPU6050 address if needed (`BOARD_I2C_SDA`, `BOARD_I2C_SCL`, `BOARD_MPU6050_ADDR`). Defaults: SDA=8, SCL=9, addr=`0x68`.
+[`board_config.local.h`](esp32/board_config.local.h.example) is gitignored. Defaults and pins live in [`board_config.h`](esp32/board_config.h) (SDA=8, SCL=9, addr=`0x68`).
 
 ### 4. Open and upload
 
-1. **File → Open** → `C:\Petcam\edge\esp32\esp32.ino`  
+1. **File → Open** → `C:\Petcam\edge\esp32\esp32\esp32.ino`  
    (folder name `esp32` must match `esp32.ino`)
 2. Click **Upload**
 3. Open **Serial Monitor** at **115200** baud
 
-Expected log: Wi‑Fi IP → agent reachable → `Publishing sensor_msgs/Imu on /imu/data`.
+Expected log:
+
+1. Wi‑Fi IP printed
+2. `Waiting for micro-ROS agent...` then `agent is reachable`
+3. `Publishing sensor_msgs/Imu on /imu/data`
+4. If the agent or Wi‑Fi drops later, the sketch retries without reboot (LED blinks while waiting)
 
 ## Orin Nano: micro-ROS Agent (Humble)
 
 On the Orin (same home Wi‑Fi AP):
 
 ```bash
-ip -4 addr show   # use this IP in board_config.h
+ip -4 addr show   # use this IP in board_config.local.h
 
 docker run -it --rm --net=host microros/micro-ros-agent:humble udp4 --port 8888 -v6
 ```
@@ -122,9 +137,11 @@ Tips:
 
 | File | Role |
 |------|------|
-| `esp32.ino` | Wi‑Fi + micro-ROS node + `/imu/data` timer |
-| `board_config.h` | SSID, Agent IP, I2C pins, rate |
-| `mpu6050.h` / `mpu6050.cpp` | MPU6050 driver (±2g / ±250 dps → SI) |
+| `esp32/esp32.ino` | Wi‑Fi + micro-ROS node + reconnect + `/imu/data` timer |
+| `esp32/board_config.h` | Defaults (pins, rates); includes optional local secrets |
+| `esp32/board_config.local.h.example` | Template for SSID / agent IP (copy → `.local.h`) |
+| `esp32/mpu6050.h` / `esp32/mpu6050.cpp` | MPU6050 driver (±2g / ±250 dps → SI) |
+| `esp32/wifi_transport.cpp` | Local Wi‑Fi UDP transport (S3 library workaround) |
 
 ## Out of scope
 
