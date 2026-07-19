@@ -15,10 +15,9 @@ extern "C" {
 static WiFiUDP udp_client;
 
 bool arduino_wifi_transport_open(struct uxrCustomTransport *transport) {
-  struct micro_ros_agent_locator *locator =
-      (struct micro_ros_agent_locator *)transport->args;
-  udp_client.begin(locator->port);
-  return true;
+  (void)transport;
+  /* Bind an ephemeral local port; agent address is used only on send. */
+  return udp_client.begin(0) == 1;
 }
 
 bool arduino_wifi_transport_close(struct uxrCustomTransport *transport) {
