@@ -16,7 +16,6 @@
 
 #include <rcl/error_handling.h>
 #include <rcl/rcl.h>
-#include <rclc/executor.h>
 #include <rclc/rclc.h>
 #include <rmw_microros/rmw_microros.h>
 #include <sensor_msgs/msg/imu.h>
@@ -39,8 +38,6 @@ sensor_msgs__msg__Imu imu_msg;
 rclc_support_t support;
 rcl_allocator_t allocator;
 rcl_node_t node;
-rcl_timer_t timer;
-rclc_executor_t executor;
 
 static char frame_id[] = "imu_link";
 
@@ -50,17 +47,21 @@ static char frame_id[] = "imu_link";
 #define LED_PIN LED_BUILTIN
 #endif
 
-#define RCCHECK(fn)                 \
-  {                                 \
-    rcl_ret_t temp_rc = (fn);       \
-    if (temp_rc != RCL_RET_OK) {    \
-      error_loop();                 \
-    }                               \
+#define RCCHECK(fn)                                                            \
+  {                                                                            \
+    rcl_ret_t temp_rc = (fn);                                                  \
+    if (temp_rc != RCL_RET_OK) {                                               \
+      Serial.printf("RCCHECK fail line %d rc=%d\n", __LINE__, (int)temp_rc);   \
+      Serial.flush();                                                          \
+      error_loop();                                                            \
+    }                                                                          \
   }
-#define RCSOFTCHECK(fn)             \
-  {                                 \
-    rcl_ret_t temp_rc = (fn);       \
-    (void)temp_rc;                  \
+#define RCSOFTCHECK(fn)                                                        \
+  {                                                                            \
+    rcl_ret_t temp_rc = (fn);                                                  \
+    if (temp_rc != RCL_RET_OK) {                                               \
+      Serial.printf("RCSOFT fail line %d rc=%d\n", __LINE__, (int)temp_rc);    \
+    }                                                                          \
   }
 
 void error_loop() {
@@ -118,18 +119,16 @@ void log_published_imu(const Mpu6050Sample &sample, uint32_t seq) {
   Serial.println();
 }
 
-void timer_callback(rcl_timer_t *timer_handle, int64_t /*last_call_time*/) {
-  if (timer_handle == NULL) {
-    return;
-  }
-
+void publish_one_imu() {
   Mpu6050Sample sample;
 #if IMU_DATA_MODE == IMU_DATA_MODE_SIM
   if (!imuSimRead(sample)) {
+    Serial.println("imuSimRead failed");
     return;
   }
 #else
   if (!mpu6050Read(sample)) {
+    Serial.println("mpu6050Read failed");
     return;
   }
 #endif
@@ -139,7 +138,6 @@ void timer_callback(rcl_timer_t *timer_handle, int64_t /*last_call_time*/) {
 
   static uint32_t s_seq;
   ++s_seq;
-  /* Always print first 5 packets, then every N. */
   if (s_seq <= 5 || (s_seq % IMU_SERIAL_LOG_EVERY_N) == 0) {
     log_published_imu(sample, s_seq);
   }
@@ -282,6 +280,7 @@ void setup() {
   wait_for_agent();
 
   allocator = rcl_get_default_allocator();
+  Serial.println("Init rclc_support...");
   RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
 
   if (rmw_uros_sync_session(1000) == RMW_RET_OK) {
@@ -290,18 +289,14 @@ void setup() {
     Serial.println("Agent time sync failed; stamps may be relative");
   }
 
+  Serial.println("Init node...");
   RCCHECK(rclc_node_init_default(&node, "petcam_esp32_imu", "", &support));
 
+  Serial.println("Init publisher /imu/data (sensor_msgs/Imu)...");
   RCCHECK(rclc_publisher_init_best_effort(
       &publisher, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
       "imu/data"));
-
-  RCCHECK(rclc_timer_init_default(&timer, &support,
-                                  RCL_MS_TO_NS(IMU_PUBLISH_PERIOD_MS),
-                                  timer_callback));
-
-  RCCHECK(rclc_executor_init(&executor, &support.context, 1, &allocator));
-  RCCHECK(rclc_executor_add_timer(&executor, &timer));
+  Serial.println("Publisher OK");
 
   memset(&imu_msg, 0, sizeof(imu_msg));
   imu_msg.header.frame_id.data = frame_id;
@@ -313,8 +308,23 @@ void setup() {
                 IMU_PUBLISH_PERIOD_MS);
   Serial.printf("Serial IMU log: first 5 packets, then every %d\n",
                 IMU_SERIAL_LOG_EVERY_N);
+  Serial.println("Entering loop()");
 }
 
 void loop() {
-  RCSOFTCHECK(rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100)));
+  static uint32_t s_last_ms;
+  static uint32_t s_hb;
+  const uint32_t now = millis();
+
+  if (now - s_last_ms >= static_cast<uint32_t>(IMU_PUBLISH_PERIOD_MS)) {
+    s_last_ms = now;
+    publish_one_imu();
+  }
+
+  if (now - s_hb >= 5000) {
+    s_hb = now;
+    Serial.printf("loop heartbeat WiFi=%s IP=%s\n",
+                  WiFi.status() == WL_CONNECTED ? "OK" : "DOWN",
+                  WiFi.localIP().toString().c_str());
+  }
 }
