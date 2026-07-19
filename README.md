@@ -1,6 +1,6 @@
 # petcam_esp32_s3 (Arduino IDE)
 
-ESP32-S3 firmware for PetCam: **micro-ROS (Humble)** over **Wi‑Fi UDP**, publishing **MPU6050** IMU data to an NVIDIA Orin Nano (ROS 2 Humble).
+ESP32-S3 firmware for PetCam: **micro-ROS (Humble)** over **Wi‑Fi TCP** (default; UDP optional), publishing **MPU6050** / SIM IMU data to an NVIDIA Orin Nano (ROS 2 Humble).
 
 Built for **Arduino IDE** (not ESP-IDF).
 
@@ -9,10 +9,12 @@ Built for **Arduino IDE** (not ESP-IDF).
 ```
 ESP32-S3 (STA) ──join──► Home Wi‑Fi AP ◄──join── Orin Nano (STA)
                               │
-                              └─ LAN UDP 8888 ─► micro-ros-agent ─► /imu/data
+                              └─ LAN TCP 8888 ─► micro-ros-agent ─► /imu/data
 ```
 
 Both devices join the **same home Wi‑Fi AP** as stations. **Not** Wi‑Fi Direct / SoftAP.
+
+Default transport is **TCP** so it matches Orin `create_map` (`micro_ros_agent tcp4 --port 8888`).
 
 | Topic | Type | Rate |
 |-------|------|------|
@@ -71,7 +73,7 @@ docker pull microros/micro_ros_static_library_builder:humble
 docker run -it --rm -v "%USERPROFILE%/OneDrive/Documents/Arduino/libraries/micro_ros_arduino:/project" --env MICROROS_LIBRARY_FOLDER=extras microros/micro_ros_static_library_builder:humble -p esp32s3
 ```
 
-### 3. Configure Wi‑Fi and Agent IP
+### 3. Configure Wi‑Fi, Agent IP, and transport
 
 Edit [`board_config.h`](board_config.h):
 
@@ -80,6 +82,7 @@ Edit [`board_config.h`](board_config.h):
 #define WIFI_PASSWORD "YOUR_HOME_WIFI_PASSWORD"
 #define MICROROS_AGENT_IP "192.168.1.100"   // Orin LAN IP on the home AP
 #define MICROROS_AGENT_PORT 8888
+#define MICROROS_TRANSPORT MICROROS_TRANSPORT_TCP  // default; or _UDP
 ```
 
 Also set I2C pins / MPU6050 address if needed (`BOARD_I2C_SDA`, `BOARD_I2C_SCL`, `BOARD_MPU6050_ADDR`). Defaults: SDA=8, SCL=9, addr=`0x68`.
@@ -91,16 +94,27 @@ Also set I2C pins / MPU6050 address if needed (`BOARD_I2C_SDA`, `BOARD_I2C_SCL`,
 2. Click **Upload**
 3. Open **Serial Monitor** at **115200** baud
 
-Expected log: Wi‑Fi IP → agent reachable → `Publishing sensor_msgs/Imu on /imu/data`.
+Expected log: Wi‑Fi IP → `micro-ROS TCP transport -> <orin-ip>:8888` → agent reachable → `Publishing sensor_msgs/Imu on /imu/data`.
 
 ## Orin Nano: micro-ROS Agent (Humble)
 
-On the Orin (same home Wi‑Fi AP):
+On the Orin (same home Wi‑Fi AP). Prefer the create_map helper (TCP):
 
 ```bash
 ip -4 addr show   # use this IP in board_config.h
+./scripts/run_create_map.sh          # starts micro_ros_agent tcp4 :8888
+```
 
-docker run -it --rm --net=host microros/micro-ros-agent:humble udp4 --port 8888 -v6
+Manual agent (must match `MICROROS_TRANSPORT`):
+
+```bash
+# TCP (firmware default)
+ros2 run micro_ros_agent micro_ros_agent tcp4 --port 8888 -v6
+# or Docker:
+docker run -it --rm --net=host microros/micro-ros-agent:humble tcp4 --port 8888 -v6
+
+# UDP fallback (only if MICROROS_TRANSPORT_UDP on ESP32)
+# docker run -it --rm --net=host microros/micro-ros-agent:humble udp4 --port 8888 -v6
 ```
 
 Verify:
@@ -117,6 +131,7 @@ Tips:
 - Prefer DHCP reservation for the Orin IP.
 - Disable AP **client isolation** if devices cannot ping each other.
 - Agent IP = **Orin** address, not the ESP32 IP.
+- Transport mode on ESP32 and Orin **must match** (TCP↔tcp4 or UDP↔udp4).
 
 ## Simulation vs real IMU
 
@@ -142,11 +157,12 @@ SIM notes for Orin `create_map`:
 
 | File | Role |
 |------|------|
-| `esp32.ino` | Wi‑Fi + micro-ROS node + `/imu/data` timer |
-| `board_config.h` | SSID, Agent IP, I2C pins, rate, **IMU mode** |
+| `esp32.ino` | Wi‑Fi + micro-ROS node + `/imu/data` publish loop |
+| `board_config.h` | SSID, Agent IP, transport, I2C pins, rate, **IMU mode** |
 | `imu_sim.h` / `imu_sim.cpp` | Simulation path (~500 sq ft L-home) |
 | `mpu6050.h` / `mpu6050.cpp` | MPU6050 driver (±2g / ±250 dps → SI) |
-| `wifi_transport.cpp` | Wi‑Fi UDP transport for micro-ROS |
+| `wifi_tcp_transport.h` / `.cpp` | Wi‑Fi **TCP** XRCE transport (default) |
+| `wifi_transport.cpp` | Wi‑Fi **UDP** XRCE transport (fallback) |
 
 ## Out of scope
 
