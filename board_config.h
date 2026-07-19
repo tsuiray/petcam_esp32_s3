@@ -11,7 +11,7 @@
 
 /* Orin LAN IP on that AP (DHCP reservation recommended). */
 #ifndef MICROROS_AGENT_IP
-#define MICROROS_AGENT_IP "192.168.1.100"
+#define MICROROS_AGENT_IP "192.168.18.15"
 #endif
 
 #ifndef MICROROS_AGENT_PORT
@@ -34,4 +34,16 @@
 /* IMU publish period (ms). 20 ms = 50 Hz. */
 #ifndef IMU_PUBLISH_PERIOD_MS
 #define IMU_PUBLISH_PERIOD_MS 20
+#endif
+
+/*
+ * IMU data source — switch in code before upload:
+ *   IMU_DATA_MODE_SIM  → synthetic path around ~500 sq ft L-home (imu_sim.*)
+ *   IMU_DATA_MODE_REAL → MPU6050 hardware
+ */
+#define IMU_DATA_MODE_REAL 0
+#define IMU_DATA_MODE_SIM 1
+
+#ifndef IMU_DATA_MODE
+#define IMU_DATA_MODE IMU_DATA_MODE_SIM
 #endif

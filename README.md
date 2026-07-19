@@ -118,13 +118,31 @@ Tips:
 - Disable AP **client isolation** if devices cannot ping each other.
 - Agent IP = **Orin** address, not the ESP32 IP.
 
+## Simulation vs real IMU
+
+In [`board_config.h`](board_config.h):
+
+```cpp
+#define IMU_DATA_MODE IMU_DATA_MODE_SIM   // synthetic L-home path (~500 sq ft)
+// #define IMU_DATA_MODE IMU_DATA_MODE_REAL // MPU6050 hardware
+```
+
+| Mode | Source | Files |
+|------|--------|-------|
+| `IMU_DATA_MODE_SIM` | Virtual robot loops an L-shaped ~490 sq ft footprint; synthesizes accel/gyro | [`imu_sim.cpp`](imu_sim.cpp) / [`imu_sim.h`](imu_sim.h) |
+| `IMU_DATA_MODE_REAL` | MPU6050 over I2C | [`mpu6050.cpp`](mpu6050.cpp) |
+
+Sim path (meters): living rectangle + bedroom wing — for Orin `create_map` dead-reckoning tests without hardware motion.
+
 ## Project files
 
 | File | Role |
 |------|------|
 | `esp32.ino` | Wi‑Fi + micro-ROS node + `/imu/data` timer |
-| `board_config.h` | SSID, Agent IP, I2C pins, rate |
+| `board_config.h` | SSID, Agent IP, I2C pins, rate, **IMU mode** |
+| `imu_sim.h` / `imu_sim.cpp` | Simulation path (~500 sq ft L-home) |
 | `mpu6050.h` / `mpu6050.cpp` | MPU6050 driver (±2g / ±250 dps → SI) |
+| `wifi_transport.cpp` | Wi‑Fi UDP transport for micro-ROS |
 
 ## Out of scope
 

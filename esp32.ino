@@ -25,6 +25,9 @@
 
 #include "board_config.h"
 #include "mpu6050.h"
+#if IMU_DATA_MODE == IMU_DATA_MODE_SIM
+#include "imu_sim.h"
+#endif
 
 #if !defined(ESP32)
 #error This sketch targets ESP32 / ESP32-S3 with Wi-Fi.
@@ -93,9 +96,15 @@ void timer_callback(rcl_timer_t *timer_handle, int64_t /*last_call_time*/) {
   }
 
   Mpu6050Sample sample;
+#if IMU_DATA_MODE == IMU_DATA_MODE_SIM
+  if (!imuSimRead(sample)) {
+    return;
+  }
+#else
   if (!mpu6050Read(sample)) {
     return;
   }
+#endif
 
   fill_imu_message(sample);
   RCSOFTCHECK(rcl_publish(&publisher, &imu_msg, NULL));
@@ -119,6 +128,15 @@ void setup() {
   delay(1000);
   Serial.println("PetCam ESP32-S3 micro-ROS IMU (Arduino)");
 
+#if IMU_DATA_MODE == IMU_DATA_MODE_SIM
+  {
+    const float dt = IMU_PUBLISH_PERIOD_MS / 1000.0f;
+    imuSimBegin(dt);
+    Serial.printf("IMU mode: SIMULATION (L-home ~%.1f m^2 / ~%.0f sq ft)\n",
+                  imuSimFootprintAreaM2(), imuSimFootprintAreaM2() * 10.7639f);
+  }
+#else
+  Serial.println("IMU mode: REAL (MPU6050)");
   Wire.begin(BOARD_I2C_SDA, BOARD_I2C_SCL);
   if (!mpu6050Begin(Wire, BOARD_MPU6050_ADDR)) {
     Serial.println("MPU6050 init failed — check wiring / address");
@@ -126,6 +144,7 @@ void setup() {
     Serial.printf("MPU6050 OK (SDA=%d SCL=%d addr=0x%02X)\n", BOARD_I2C_SDA,
                   BOARD_I2C_SCL, BOARD_MPU6050_ADDR);
   }
+#endif
 
   Serial.printf("Connecting Wi-Fi SSID=%s ...\n", WIFI_SSID);
   set_microros_wifi_transports(WIFI_SSID, WIFI_PASSWORD, MICROROS_AGENT_IP,
