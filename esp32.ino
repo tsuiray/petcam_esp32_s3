@@ -106,6 +106,18 @@ void fill_imu_message(const Mpu6050Sample &sample) {
   imu_msg.linear_acceleration.z = sample.accel_z;
 }
 
+void log_published_imu(const Mpu6050Sample &sample, uint32_t seq) {
+  Serial.printf(
+      "UDP/IMU #%lu ax=%.3f ay=%.3f az=%.3f gx=%.3f gy=%.3f gz=%.3f",
+      static_cast<unsigned long>(seq), sample.accel_x, sample.accel_y,
+      sample.accel_z, sample.gyro_x, sample.gyro_y, sample.gyro_z);
+#if IMU_DATA_MODE == IMU_DATA_MODE_SIM
+  Serial.printf(" | SIM edge=%d v=%.2f yaw=%.1fdeg", imuSimGetEdge(),
+                imuSimGetSpeed(), imuSimGetYaw() * 57.2957795f);
+#endif
+  Serial.println();
+}
+
 void timer_callback(rcl_timer_t *timer_handle, int64_t /*last_call_time*/) {
   if (timer_handle == NULL) {
     return;
@@ -125,14 +137,12 @@ void timer_callback(rcl_timer_t *timer_handle, int64_t /*last_call_time*/) {
   fill_imu_message(sample);
   RCSOFTCHECK(rcl_publish(&publisher, &imu_msg, NULL));
 
-#if IMU_DATA_MODE == IMU_DATA_MODE_SIM
-  static uint32_t s_dbg;
-  if ((++s_dbg % 50) == 0) { /* ~1 Hz at 50 Hz publish */
-    Serial.printf("SIM edge=%d v=%.2f ax=%.2f gz=%.2f yaw=%.1fdeg\n",
-                  imuSimGetEdge(), imuSimGetSpeed(), sample.accel_x,
-                  sample.gyro_z, imuSimGetYaw() * 57.2957795f);
+  static uint32_t s_seq;
+  ++s_seq;
+  /* Always print first 5 packets, then every N. */
+  if (s_seq <= 5 || (s_seq % IMU_SERIAL_LOG_EVERY_N) == 0) {
+    log_published_imu(sample, s_seq);
   }
-#endif
 }
 
 static const char *wifi_status_str(wl_status_t s) {
@@ -301,6 +311,8 @@ void setup() {
 
   Serial.printf("Publishing sensor_msgs/Imu on /imu/data every %d ms\n",
                 IMU_PUBLISH_PERIOD_MS);
+  Serial.printf("Serial IMU log: first 5 packets, then every %d\n",
+                IMU_SERIAL_LOG_EVERY_N);
 }
 
 void loop() {

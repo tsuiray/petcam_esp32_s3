@@ -36,6 +36,11 @@
 #define IMU_PUBLISH_PERIOD_MS 20
 #endif
 
+/* Serial: print published IMU every N samples (1 = every packet). */
+#ifndef IMU_SERIAL_LOG_EVERY_N
+#define IMU_SERIAL_LOG_EVERY_N 10
+#endif
+
 /*
  * IMU data source — switch in code before upload:
  *   IMU_DATA_MODE_SIM  → synthetic path around ~500 sq ft L-home (imu_sim.*)
