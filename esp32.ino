@@ -1,8 +1,9 @@
 /*
- * PetCam ESP32-S3 — micro-ROS (Humble) IMU over Wi-Fi UDP
+ * PetCam ESP32-S3 — micro-ROS (Humble) IMU over Wi-Fi TCP/UDP
  *
  * Both ESP32-S3 and Orin Nano join the same home Wi-Fi AP as STA.
  * Publishes sensor_msgs/Imu on /imu/data to micro-ros-agent on the Orin.
+ * Default transport is TCP (MICROROS_TRANSPORT_TCP) to match Orin create_map.
  *
  * Board: Tools → Board → ESP32 Arduino → ESP32S3 Dev Module (or your S3 board)
  * Library: micro_ros_arduino (branch/release matching Humble)
@@ -27,6 +28,9 @@
 #include "mpu6050.h"
 #if IMU_DATA_MODE == IMU_DATA_MODE_SIM
 #include "imu_sim.h"
+#endif
+#if MICROROS_TRANSPORT == MICROROS_TRANSPORT_TCP
+#include "wifi_tcp_transport.h"
 #endif
 
 #if !defined(ESP32)
@@ -109,7 +113,11 @@ void fill_imu_message(const Mpu6050Sample &sample) {
 
 void log_published_imu(const Mpu6050Sample &sample, uint32_t seq) {
   Serial.printf(
+#if MICROROS_TRANSPORT == MICROROS_TRANSPORT_TCP
+      "TCP/IMU #%lu ax=%.3f ay=%.3f az=%.3f gx=%.3f gy=%.3f gz=%.3f",
+#else
       "UDP/IMU #%lu ax=%.3f ay=%.3f az=%.3f gx=%.3f gy=%.3f gz=%.3f",
+#endif
       static_cast<unsigned long>(seq), sample.accel_x, sample.accel_y,
       sample.accel_z, sample.gyro_x, sample.gyro_y, sample.gyro_z);
 #if IMU_DATA_MODE == IMU_DATA_MODE_SIM
@@ -213,7 +221,7 @@ bool connect_wifi_sta(const char *ssid, const char *password,
   return true;
 }
 
-/** Bind micro-ROS UDP transport after WiFi is already up (no infinite wait). */
+/** Bind micro-ROS Wi-Fi transport after WiFi is already up (no infinite wait). */
 void bind_microros_wifi_transport(const char *agent_ip, uint16_t agent_port) {
   static micro_ros_agent_locator locator;
   static char ip_buf[32];
@@ -222,12 +230,19 @@ void bind_microros_wifi_transport(const char *agent_ip, uint16_t agent_port) {
   locator.address.fromString(ip_buf);
   locator.port = static_cast<int>(agent_port);
 
+#if MICROROS_TRANSPORT == MICROROS_TRANSPORT_TCP
+  rmw_uros_set_custom_transport(
+      false, reinterpret_cast<void *>(&locator), arduino_wifi_tcp_transport_open,
+      arduino_wifi_tcp_transport_close, arduino_wifi_tcp_transport_write,
+      arduino_wifi_tcp_transport_read);
+  Serial.printf("micro-ROS TCP transport -> %s:%u\n", agent_ip, agent_port);
+#else
   rmw_uros_set_custom_transport(
       false, reinterpret_cast<void *>(&locator), arduino_wifi_transport_open,
       arduino_wifi_transport_close, arduino_wifi_transport_write,
       arduino_wifi_transport_read);
-
   Serial.printf("micro-ROS UDP transport -> %s:%u\n", agent_ip, agent_port);
+#endif
 }
 
 void wait_for_agent() {

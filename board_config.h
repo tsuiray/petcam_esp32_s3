@@ -18,6 +18,17 @@
 #define MICROROS_AGENT_PORT 8888
 #endif
 
+/*
+ * XRCE transport to Orin micro_ros_agent (must match agent mode):
+ *   TCP → micro_ros_agent tcp4 --port 8888  (create_map default)
+ *   UDP → micro_ros_agent udp4 --port 8888
+ */
+#define MICROROS_TRANSPORT_UDP 0
+#define MICROROS_TRANSPORT_TCP 1
+#ifndef MICROROS_TRANSPORT
+#define MICROROS_TRANSPORT MICROROS_TRANSPORT_TCP
+#endif
+
 /* MPU6050 I2C — adjust to your schematic. */
 #ifndef BOARD_I2C_SDA
 #define BOARD_I2C_SDA 8
