@@ -113,8 +113,11 @@ void log_published_imu(const Mpu6050Sample &sample, uint32_t seq) {
       static_cast<unsigned long>(seq), sample.accel_x, sample.accel_y,
       sample.accel_z, sample.gyro_x, sample.gyro_y, sample.gyro_z);
 #if IMU_DATA_MODE == IMU_DATA_MODE_SIM
-  Serial.printf(" | SIM edge=%d v=%.2f yaw=%.1fdeg", imuSimGetEdge(),
-                imuSimGetSpeed(), imuSimGetYaw() * 57.2957795f);
+  Serial.printf(" | SIM lap=%lu i=%lu edge=%d v=%.2f yaw=%.1fdeg",
+                static_cast<unsigned long>(imuSimGetLap()),
+                static_cast<unsigned long>(imuSimGetSampleIndex()),
+                imuSimGetEdge(), imuSimGetSpeed(),
+                imuSimGetYaw() * 57.2957795f);
 #endif
   Serial.println();
 }
@@ -257,6 +260,8 @@ void setup() {
     imuSimBegin(dt);
     Serial.printf("IMU mode: SIMULATION (L-home ~%.1f m^2 / ~%.0f sq ft)\n",
                   imuSimFootprintAreaM2(), imuSimFootprintAreaM2() * 10.7639f);
+    Serial.println(
+        "SIM publishes WORLD-frame ax/ay (z=0) for deterministic closed laps");
   }
 #else
   Serial.println("IMU mode: REAL (MPU6050)");

@@ -129,10 +129,14 @@ In [`board_config.h`](board_config.h):
 
 | Mode | Source | Files |
 |------|--------|-------|
-| `IMU_DATA_MODE_SIM` | Virtual robot loops an L-shaped ~490 sq ft footprint; synthesizes accel/gyro | [`imu_sim.cpp`](imu_sim.cpp) / [`imu_sim.h`](imu_sim.h) |
+| `IMU_DATA_MODE_SIM` | Precomputed closed L-home lap (~490 sq ft); **same samples every loop** | [`imu_sim.cpp`](imu_sim.cpp) / [`imu_sim.h`](imu_sim.h) |
 | `IMU_DATA_MODE_REAL` | MPU6050 over I2C | [`mpu6050.cpp`](mpu6050.cpp) |
 
-Sim path (meters): living rectangle + bedroom wing — for Orin `create_map` dead-reckoning tests without hardware motion.
+SIM notes for Orin `create_map`:
+
+- `linear_acceleration.x/y` are **world-frame** accel (not body-frame); `z=0` (no gravity) so a naive Euler integrator redraws the same polygon each lap.
+- One lap is buffered and replayed identically (`lap` counter in Serial log).
+- If the map still drifts, check that create_map uses the same `dt` (20 ms) and zeros velocity when accel stays near 0 at corners.
 
 ## Project files
 

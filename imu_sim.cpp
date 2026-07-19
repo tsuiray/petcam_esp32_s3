@@ -1,6 +1,7 @@
 #include "imu_sim.h"
 
 #include <math.h>
+#include <string.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -8,49 +9,38 @@
 
 namespace {
 
-constexpr float kGravity = 9.80665f;
-constexpr float kAccelLin = 0.60f; /* m/s^2 — visible on Orin create_map */
-constexpr float kTurnRate = 0.80f; /* rad/s in-place yaw */
-constexpr float kYawTol = 0.03f;   /* rad */
-
 /*
- * L-shaped apartment footprint ≈ 490 sq ft (≈ 45.5 m²).
+ * L-shaped ~490 sq ft (45.5 m²) apartment — same vertices every lap.
  *
  *   (0,7)----(4.5,7)
  *     |         |
  *     |         |(4.5,4)----(8,4)
  *     |                      |
  *   (0,0)------------------(8,0)
- *
- * Motion model for create_map: NO long cruise at constant velocity
- * (that yields a_x=a_y=0 and looks like "only gravity"). Each edge uses a
- * triangular speed profile so forward accel is non-zero almost the whole time.
  */
 constexpr float kVertices[][2] = {
-    {0.0f, 0.0f},
-    {8.0f, 0.0f},
-    {8.0f, 4.0f},
-    {4.5f, 4.0f},
-    {4.5f, 7.0f},
-    {0.0f, 7.0f},
+    {0.0f, 0.0f}, {8.0f, 0.0f}, {8.0f, 4.0f},
+    {4.5f, 4.0f}, {4.5f, 7.0f}, {0.0f, 7.0f},
 };
 constexpr int kNumVertices = 6;
 
-enum class Phase : uint8_t { Drive, Turn };
+/* Max samples for one full lap (edges + turns) at ~50 Hz. */
+constexpr int kMaxLapSamples = 8000;
 
+struct LapSample {
+  float ax;  /* world-frame m/s^2 */
+  float ay;
+  float gz;  /* rad/s */
+  float yaw; /* rad, attitude at this sample */
+  float speed;
+  uint8_t edge;
+};
+
+LapSample s_lap[kMaxLapSamples];
+int s_lap_len = 0;
+int s_idx = 0;
+uint32_t s_lap_count = 0;
 float s_dt = 0.02f;
-float s_x = 0.0f;
-float s_y = 0.0f;
-float s_yaw = 0.0f;
-float s_speed = 0.0f;
-int s_edge = 0;
-Phase s_phase = Phase::Drive;
-float s_target_yaw = 0.0f;
-float s_edge_length = 0.0f;
-float s_traveled = 0.0f;
-float s_ax = 0.0f;
-float s_wz = 0.0f;
-uint32_t s_tick = 0;
 
 float wrapPi(float a) {
   while (a > static_cast<float>(M_PI)) {
@@ -62,95 +52,132 @@ float wrapPi(float a) {
   return a;
 }
 
-float dist(float x0, float y0, float x1, float y1) {
+float dist2(float x0, float y0, float x1, float y1) {
   const float dx = x1 - x0;
   const float dy = y1 - y0;
   return sqrtf(dx * dx + dy * dy);
 }
 
-void loadEdge(int edge) {
-  const int i0 = edge % kNumVertices;
-  const int i1 = (edge + 1) % kNumVertices;
-  s_edge_length = dist(kVertices[i0][0], kVertices[i0][1], kVertices[i1][0],
-                       kVertices[i1][1]);
-  s_traveled = 0.0f;
-  s_target_yaw = atan2f(kVertices[i1][1] - kVertices[i0][1],
-                        kVertices[i1][0] - kVertices[i0][0]);
-  s_x = kVertices[i0][0];
-  s_y = kVertices[i0][1];
-  s_speed = 0.0f;
-  s_ax = 0.0f;
-  s_phase = Phase::Drive;
+bool pushSample(float ax, float ay, float gz, float yaw, float speed,
+                uint8_t edge) {
+  if (s_lap_len >= kMaxLapSamples) {
+    return false;
+  }
+  s_lap[s_lap_len].ax = ax;
+  s_lap[s_lap_len].ay = ay;
+  s_lap[s_lap_len].gz = gz;
+  s_lap[s_lap_len].yaw = yaw;
+  s_lap[s_lap_len].speed = speed;
+  s_lap[s_lap_len].edge = edge;
+  ++s_lap_len;
+  return true;
 }
 
 /**
- * Triangular speed along edge: accel first half of distance, decel second half.
- * Integrates a → v → s so we never stick at v=0 with a>0 unused.
+ * Append Euler-consistent accel/decel along a straight edge.
+ * With constant +a for N steps then -a for N steps:
+ *   distance = N^2 * a * dt^2  →  a = L / (N^2 * dt^2)
+ *   final velocity = 0
+ * so naive integrators that use the same Euler rule close cleanly.
  */
-void updateDrive() {
-  const float half = 0.5f * s_edge_length;
-  if (half < 0.05f) {
-    s_speed = 0.0f;
-    s_ax = 0.0f;
-    s_traveled = s_edge_length;
+void appendEdge(int edge_idx, float x0, float y0, float x1, float y1,
+                float yaw) {
+  const float L = dist2(x0, y0, x1, y1);
+  if (L < 1e-3f) {
     return;
   }
+  const float ux = (x1 - x0) / L;
+  const float uy = (y1 - y0) / L;
 
-  const float a_mag = kAccelLin;
-  /* Cap speed so short edges still finish cleanly. */
-  const float v_peak = sqrtf(a_mag * half);
-
-  if (s_traveled < half) {
-    s_ax = a_mag;
-  } else {
-    s_ax = -a_mag;
+  /* Choose N so peak speed stays moderate (~0.4–0.8 m/s). */
+  int N = static_cast<int>(L / (0.5f * s_dt)); /* rough */
+  if (N < 20) {
+    N = 20;
+  }
+  if (N > 400) {
+    N = 400;
   }
 
-  s_speed += s_ax * s_dt;
-  if (s_speed < 0.0f) {
-    s_speed = 0.0f;
+  const float a_mag = L / (static_cast<float>(N * N) * s_dt * s_dt);
+  float v = 0.0f;
+
+  for (int i = 0; i < N; ++i) {
+    const float ax = a_mag * ux;
+    const float ay = a_mag * uy;
+    v += a_mag * s_dt;
+    if (!pushSample(ax, ay, 0.0f, yaw, v, static_cast<uint8_t>(edge_idx))) {
+      return;
+    }
   }
-  if (s_speed > v_peak) {
-    s_speed = v_peak;
+  for (int i = 0; i < N; ++i) {
+    const float ax = -a_mag * ux;
+    const float ay = -a_mag * uy;
+    v -= a_mag * s_dt;
+    if (v < 0.0f) {
+      v = 0.0f;
+    }
+    if (!pushSample(ax, ay, 0.0f, yaw, v, static_cast<uint8_t>(edge_idx))) {
+      return;
+    }
   }
-
-  s_x += cosf(s_yaw) * s_speed * s_dt;
-  s_y += sinf(s_yaw) * s_speed * s_dt;
-  s_traveled += s_speed * s_dt;
-
-  if (s_traveled >= s_edge_length - 0.001f ||
-      (s_traveled >= half && s_speed <= 0.001f)) {
-    const int i1 = (s_edge + 1) % kNumVertices;
-    s_x = kVertices[i1][0];
-    s_y = kVertices[i1][1];
-    s_traveled = s_edge_length;
-    s_speed = 0.0f;
-    s_ax = 0.0f;
-
-    const int i2 = (s_edge + 2) % kNumVertices;
-    s_target_yaw = atan2f(kVertices[i2][1] - kVertices[i1][1],
-                          kVertices[i2][0] - kVertices[i1][0]);
-    s_phase = Phase::Turn;
+  /* Force exact zero velocity marker samples (a=0) so integrators settle. */
+  for (int i = 0; i < 3; ++i) {
+    pushSample(0.0f, 0.0f, 0.0f, yaw, 0.0f, static_cast<uint8_t>(edge_idx));
   }
 }
 
-void updateTurn() {
-  s_ax = 0.0f;
-  s_speed = 0.0f;
-  const float err = wrapPi(s_target_yaw - s_yaw);
-  if (fabsf(err) <= kYawTol) {
-    s_yaw = s_target_yaw;
-    s_wz = 0.0f;
-    s_edge = (s_edge + 1) % kNumVertices;
-    loadEdge(s_edge);
-    s_yaw = s_target_yaw;
-  } else {
-    s_wz = (err > 0.0f) ? kTurnRate : -kTurnRate;
-    s_yaw = wrapPi(s_yaw + s_wz * s_dt);
-    if ((err > 0.0f && wrapPi(s_target_yaw - s_yaw) < 0.0f) ||
-        (err < 0.0f && wrapPi(s_target_yaw - s_yaw) > 0.0f)) {
-      s_yaw = s_target_yaw;
+void appendTurn(float yaw0, float yaw1, uint8_t edge_idx) {
+  float dyaw = wrapPi(yaw1 - yaw0);
+  if (fabsf(dyaw) < 1e-4f) {
+    return;
+  }
+
+  /* ~90 deg/s turn rate target. */
+  const float turn_rate = 0.9f; /* rad/s magnitude */
+  const float T = fabsf(dyaw) / turn_rate;
+  int N = static_cast<int>(T / s_dt + 0.5f);
+  if (N < 10) {
+    N = 10;
+  }
+  if (N > 300) {
+    N = 300;
+  }
+
+  const float gz = dyaw / (static_cast<float>(N) * s_dt);
+  for (int i = 1; i <= N; ++i) {
+    const float yaw = wrapPi(yaw0 + gz * static_cast<float>(i) * s_dt);
+    if (!pushSample(0.0f, 0.0f, gz, yaw, 0.0f, edge_idx)) {
+      return;
     }
+  }
+  /* Settle after turn. */
+  for (int i = 0; i < 3; ++i) {
+    pushSample(0.0f, 0.0f, 0.0f, yaw1, 0.0f, edge_idx);
+  }
+}
+
+void buildLapBuffer() {
+  s_lap_len = 0;
+
+  float yaw = atan2f(kVertices[1][1] - kVertices[0][1],
+                     kVertices[1][0] - kVertices[0][0]);
+
+  for (int e = 0; e < kNumVertices; ++e) {
+    const int i0 = e;
+    const int i1 = (e + 1) % kNumVertices;
+    const int i2 = (e + 2) % kNumVertices;
+
+    const float x0 = kVertices[i0][0];
+    const float y0 = kVertices[i0][1];
+    const float x1 = kVertices[i1][0];
+    const float y1 = kVertices[i1][1];
+
+    yaw = atan2f(y1 - y0, x1 - x0);
+    appendEdge(e, x0, y0, x1, y1, yaw);
+
+    const float yaw_next = atan2f(kVertices[i2][1] - y1, kVertices[i2][0] - x1);
+    appendTurn(yaw, yaw_next, static_cast<uint8_t>(e));
+    yaw = yaw_next;
   }
 }
 
@@ -165,42 +192,61 @@ float imuSimFootprintAreaM2() {
   return fabsf(sum) * 0.5f;
 }
 
-float imuSimGetYaw() { return s_yaw; }
+float imuSimGetYaw() {
+  if (s_lap_len <= 0) {
+    return 0.0f;
+  }
+  return s_lap[s_idx].yaw;
+}
 
-float imuSimGetSpeed() { return s_speed; }
+float imuSimGetSpeed() {
+  if (s_lap_len <= 0) {
+    return 0.0f;
+  }
+  return s_lap[s_idx].speed;
+}
 
-int imuSimGetEdge() { return s_edge; }
+int imuSimGetEdge() {
+  if (s_lap_len <= 0) {
+    return 0;
+  }
+  return s_lap[s_idx].edge;
+}
+
+uint32_t imuSimGetLap() { return s_lap_count; }
+
+uint32_t imuSimGetSampleIndex() { return static_cast<uint32_t>(s_idx); }
 
 void imuSimBegin(float dt_seconds) {
   s_dt = (dt_seconds > 0.001f) ? dt_seconds : 0.02f;
-  s_edge = 0;
-  s_yaw = 0.0f;
-  s_tick = 0;
-  s_wz = 0.0f;
-  loadEdge(0);
-  s_yaw = s_target_yaw;
-  s_phase = Phase::Drive;
+  s_idx = 0;
+  s_lap_count = 0;
+  buildLapBuffer();
 }
 
 bool imuSimRead(Mpu6050Sample &sample) {
-  s_wz = 0.0f;
-
-  if (s_phase == Phase::Drive) {
-    updateDrive();
-  } else {
-    updateTurn();
+  if (s_lap_len <= 0) {
+    memset(&sample, 0, sizeof(sample));
+    sample.accel_z = 0.0f;
+    sample.temp_c = 55.0f;
+    return false;
   }
 
-  ++s_tick;
+  const LapSample &s = s_lap[s_idx];
 
-  /* Body frame: +X forward, +Z up. Gravity always on Z when level. */
-  sample.accel_x = s_ax;
-  sample.accel_y = 0.0f;
-  sample.accel_z = kGravity;
+  /* World-frame accel for create_map (NOT body-frame, NOT gravity). */
+  sample.accel_x = s.ax;
+  sample.accel_y = s.ay;
+  sample.accel_z = 0.0f;
   sample.gyro_x = 0.0f;
   sample.gyro_y = 0.0f;
-  sample.gyro_z = s_wz;
-  /* Fingerprint so Orin/Serial can confirm SIM (not a sitting-still REAL IMU). */
-  sample.temp_c = 55.0f + 0.01f * static_cast<float>(s_edge);
+  sample.gyro_z = s.gz;
+  sample.temp_c = 55.0f + 0.01f * static_cast<float>(s.edge);
+
+  ++s_idx;
+  if (s_idx >= s_lap_len) {
+    s_idx = 0;
+    ++s_lap_count;
+  }
   return true;
 }
