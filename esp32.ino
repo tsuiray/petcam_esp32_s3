@@ -10,6 +10,7 @@
 
 #include <micro_ros_arduino.h>
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -75,11 +76,26 @@ void fill_imu_message(const Mpu6050Sample &sample) {
   imu_msg.header.stamp.nanosec =
       static_cast<uint32_t>((stamp_ms % 1000) * 1000000UL);
 
+#if IMU_DATA_MODE == IMU_DATA_MODE_SIM
+  /* Yaw-only attitude so create_map can use orientation if it wants. */
+  {
+    const float yaw = imuSimGetYaw();
+    const float half = 0.5f * yaw;
+    imu_msg.orientation.x = 0.0;
+    imu_msg.orientation.y = 0.0;
+    imu_msg.orientation.z = sinf(half);
+    imu_msg.orientation.w = cosf(half);
+    imu_msg.orientation_covariance[0] = 0.01;
+    imu_msg.orientation_covariance[4] = 0.01;
+    imu_msg.orientation_covariance[8] = 0.05;
+  }
+#else
   imu_msg.orientation.x = 0.0;
   imu_msg.orientation.y = 0.0;
   imu_msg.orientation.z = 0.0;
   imu_msg.orientation.w = 1.0;
   imu_msg.orientation_covariance[0] = -1.0;
+#endif
 
   imu_msg.angular_velocity.x = sample.gyro_x;
   imu_msg.angular_velocity.y = sample.gyro_y;
@@ -108,6 +124,15 @@ void timer_callback(rcl_timer_t *timer_handle, int64_t /*last_call_time*/) {
 
   fill_imu_message(sample);
   RCSOFTCHECK(rcl_publish(&publisher, &imu_msg, NULL));
+
+#if IMU_DATA_MODE == IMU_DATA_MODE_SIM
+  static uint32_t s_dbg;
+  if ((++s_dbg % 50) == 0) { /* ~1 Hz at 50 Hz publish */
+    Serial.printf("SIM edge=%d v=%.2f ax=%.2f gz=%.2f yaw=%.1fdeg\n",
+                  imuSimGetEdge(), imuSimGetSpeed(), sample.accel_x,
+                  sample.gyro_z, imuSimGetYaw() * 57.2957795f);
+  }
+#endif
 }
 
 void wait_for_agent() {
